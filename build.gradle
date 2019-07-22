@@ -10,6 +10,7 @@ buildscript {
 plugins {
     id 'scala'
     id 'application'
+    id 'idea'
     // shadow plugin to produce fat JARs
     id 'com.github.johnrengelman.shadow' version '5.1.0'
 }
@@ -25,13 +26,19 @@ ext {
     javaVersion = '1.8'
     flinkVersion = '1.8.1'
     scalaBinaryVersion = '2.12'
+    //scalaBinaryVersionWithMinor = '2.12.8'
     slf4jVersion = '1.7.7'
     log4jVersion = '1.2.17'
+    jarDir = "distribution"
+    getDate = { ->
+        new Date().format('yyyy_MM_dd_HH_mm')
+    }
 }
 
 
 sourceCompatibility = javaVersion
 targetCompatibility = javaVersion
+
 tasks.withType(JavaCompile) {
 	options.encoding = 'UTF-8'
 }
@@ -76,6 +83,8 @@ dependencies {
     // connectors. These must be in the flinkShadowJar configuration!
     // --------------------------------------------------------------
     //flinkShadowJar "org.apache.flink:flink-connector-kafka-0.11_${scalaBinaryVersion}:${flinkVersion}"
+    //flinkShadowJar group: "com.github.scopt", name: "scopt_${scalaBinaryVersion}", version: "4.0.0-RC2"
+    flinkShadowJar group: "com.github.scopt", name: "scopt_${scalaBinaryVersion}", version: "3.7.1"
 
     compile group:"log4j", name: "log4j", version: "${log4jVersion}"
     compile group:"org.slf4j", name: "slf4j-log4j12", version: "${slf4jVersion}"
@@ -97,13 +106,62 @@ sourceSets {
 
 run.classpath = sourceSets.main.runtimeClasspath
 
+task lazyClean {
+    doLast {
+        fileTree("${buildDir}/libs").files.each { file ->
+            if (!tasks.any { it.outputs.files.contains(file) }) {
+                delete(file)
+            }
+        }
+    }
+}
+
 jar {
     manifest {
         attributes 'Built-By': System.getProperty('user.name'),
                 'Build-Jdk': System.getProperty('java.version')
     }
+
+    finalizedBy lazyClean
+    finalizedBy shadowJar
 }
 
 shadowJar {
+    zip64 true
     configurations = [project.configurations.flinkShadowJar]
+    archiveFileName = "${rootProject.name}-${version}-all.${extension}"
+}
+
+task copyTestResources(type: Copy) {
+    from "${projectDir}/src/test/resources"
+    into "${buildDir}/classes/test"
+}
+processTestResources.dependsOn copyTestResources
+
+task copyJar(type: Copy) {
+    from shadowJar
+    into "$rootDir/$jarDir/"
+}
+
+task cleanJarDir(type: Delete) {
+    delete fileTree("$rootDir/$jarDir/").matching {
+        include "${rootProject.name}-*.jar"
+    }
+}
+
+build.dependsOn cleanJarDir
+build.dependsOn copyJar
+tasks.findByName("copyJar").mustRunAfter("cleanJarDir")
+
+test {
+    useJUnitPlatform()
+    afterSuite { desc, result ->
+        if (!desc.parent) {
+            println "\nTest result: ${result.resultType}"
+            println "Test summary: ${result.testCount} tests, " +
+                    "${result.successfulTestCount} succeeded, " +
+                    "${result.failedTestCount} failed, " +
+                    "${result.skippedTestCount} skipped"
+        }
+    }
 }

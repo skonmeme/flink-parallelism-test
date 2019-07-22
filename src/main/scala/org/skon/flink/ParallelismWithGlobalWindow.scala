@@ -13,14 +13,13 @@ import org.apache.flink.util.Collector
 
 object ParallelismWithGlobalWindow {
   def main(args: Array[String]): Unit = {
+    val conf = Configurations.get(args)
+
     val env = StreamExecutionEnvironment.getExecutionEnvironment
 
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     env.getConfig.setAutoWatermarkInterval(50L)
     env.setParallelism(1)
-
-    val maxParallelism = 4
-    val parallelismForTimestamp = 4
 
     val stream = env
       .addSource(new SourceFunction[(Long, Long, Long)] {
@@ -39,15 +38,17 @@ object ParallelismWithGlobalWindow {
       .evictor(TimeEvictor.of(Time.seconds(20L)))
       .trigger(CountTrigger.of(1L))
       .apply[(Long, Long, Long)]((_: Long, _: GlobalWindow, elements: Iterable[(Long, Long, Long)], out: Collector[(Long, Long, Long)]) => out.collect(elements.last))
-      .setParallelism(maxParallelism)
+      .setParallelism(conf.maxParallelism)
+      //.shuffle
+      .rebalance
       .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[(Long, Long, Long)](Time.seconds(0L)) {
         override def extractTimestamp(element: (Long, Long, Long)): Long = element._1
       })
-      .setParallelism(parallelismForTimestamp)
+      .setParallelism(conf.parallelismForTimestamp)
       .keyBy(_._3)
       .window(TumblingEventTimeWindows.of(Time.seconds(5L)))
       .reduce((_, v2) => v2)
-      .setParallelism(maxParallelism)
+      .setParallelism(conf.maxParallelism)
       .process[(Long, Long, Long)]((value, _, out) => {
         Console.println(value)
         out.collect(value)
